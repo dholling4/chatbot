@@ -1,56 +1,82 @@
 import streamlit as st
-from openai import OpenAI
+import requests
+import json
+import time
 
 # Show title and description.
 st.title("💬 Chatbot")
 st.write(
-    "This is a simple chatbot that uses OpenAI's GPT-3.5 model to generate responses. "
-    "To use this app, you need to provide an OpenAI API key, which you can get [here](https://platform.openai.com/account/api-keys). "
-    "You can also learn how to build this app step by step by [following our tutorial](https://docs.streamlit.io/develop/tutorials/llms/build-conversational-apps)."
+    "This is a simple chatbot that uses Hugging Face's free models to generate responses. "
+    "No API key required! The chatbot uses Microsoft's DialoGPT model for conversational AI."
 )
 
-# Ask user for their OpenAI API key via `st.text_input`.
-# Alternatively, you can store the API key in `./.streamlit/secrets.toml` and access it
-# via `st.secrets`, see https://docs.streamlit.io/develop/concepts/connections/secrets-management
-openai_api_key = st.text_input("OpenAI API Key", type="password")
-if not openai_api_key:
-    st.info("Please add your OpenAI API key to continue.", icon="🗝️")
-else:
+def query_huggingface_model(messages):
+    """Query Hugging Face's free inference API"""
+    # Use Microsoft's DialoGPT model which is good for conversations
+    API_URL = "https://api-inference.huggingface.co/models/microsoft/DialoGPT-large"
+    
+    # Convert messages to a single conversation string
+    conversation = ""
+    for msg in messages:
+        if msg["role"] == "user":
+            conversation += f"User: {msg['content']}\n"
+        else:
+            conversation += f"Bot: {msg['content']}\n"
+    
+    # Add the latest user input prompt
+    conversation += "Bot:"
+    
+    payload = {
+        "inputs": conversation,
+        "parameters": {
+            "max_new_tokens": 100,
+            "temperature": 0.7,
+            "return_full_text": False
+        }
+    }
+    
+    try:
+        response = requests.post(API_URL, json=payload)
+        if response.status_code == 200:
+            result = response.json()
+            if isinstance(result, list) and len(result) > 0:
+                generated_text = result[0].get("generated_text", "")
+                # Clean up the response
+                if generated_text.startswith("Bot:"):
+                    generated_text = generated_text[4:].strip()
+                return generated_text.strip() if generated_text.strip() else "I'm sorry, I couldn't generate a response. Please try again."
+            else:
+                return "I'm sorry, I couldn't generate a response. Please try again."
+        elif response.status_code == 503:
+            return "The model is currently loading. Please wait a moment and try again."
+        else:
+            return f"Sorry, there was an error (status code: {response.status_code}). Please try again."
+    except Exception as e:
+        return f"Sorry, there was an error connecting to the service: {str(e)}"
 
-    # Create an OpenAI client.
-    client = OpenAI(api_key=openai_api_key)
+# Create a session state variable to store the chat messages. This ensures that the
+# messages persist across reruns.
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-    # Create a session state variable to store the chat messages. This ensures that the
-    # messages persist across reruns.
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
+# Display the existing chat messages via `st.chat_message`.
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-    # Display the existing chat messages via `st.chat_message`.
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+# Create a chat input field to allow the user to enter a message. This will display
+# automatically at the bottom of the page.
+if prompt := st.chat_input("What is up?"):
 
-    # Create a chat input field to allow the user to enter a message. This will display
-    # automatically at the bottom of the page.
-    if prompt := st.chat_input("What is up?"):
+    # Store and display the current prompt.
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
 
-        # Store and display the current prompt.
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-
-        # Generate a response using the OpenAI API.
-        stream = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": m["role"], "content": m["content"]}
-                for m in st.session_state.messages
-            ],
-            stream=True,
-        )
-
-        # Stream the response to the chat using `st.write_stream`, then store it in 
-        # session state.
-        with st.chat_message("assistant"):
-            response = st.write_stream(stream)
-        st.session_state.messages.append({"role": "assistant", "content": response})
+    # Generate a response using the Hugging Face API.
+    with st.chat_message("assistant"):
+        with st.spinner("Thinking..."):
+            response = query_huggingface_model(st.session_state.messages)
+        st.markdown(response)
+    
+    st.session_state.messages.append({"role": "assistant", "content": response})
